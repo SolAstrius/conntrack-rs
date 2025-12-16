@@ -52,6 +52,7 @@
 
 pub use crate::connection::*;
 pub use crate::error::*;
+pub use crate::message::NfnlGroup;
 pub use crate::result::*;
 
 pub mod attributes;

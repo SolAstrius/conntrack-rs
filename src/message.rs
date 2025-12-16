@@ -31,6 +31,18 @@ pub enum CtMessage {
 #[neli_enum(serialized_type = "u16")]
 pub enum CtNetlinkMessage {
     Conntrack = subsys_message(CtNetlinkSubsys::CtNetlink, CtMessage::CtGet),
+    New = subsys_message(CtNetlinkSubsys::CtNetlink, CtMessage::CtNew),
+    Delete = subsys_message(CtNetlinkSubsys::CtNetlink, CtMessage::CtDelete),
 }
 
 impl neli::consts::nl::NlType for CtNetlinkMessage {}
+
+/// Netfilter netlink multicast groups for conntrack events
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum NfnlGroup {
+    None = 0,
+    ConntrackNew = 1,
+    ConntrackUpdate = 2,
+    ConntrackDestroy = 3,
+}
