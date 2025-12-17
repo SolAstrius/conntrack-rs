@@ -99,9 +99,13 @@ impl ConntrackEvents {
     /// Subscribe to specific conntrack event groups
     pub fn subscribe(groups: &[NfnlGroup]) -> Result<Self> {
         // Convert group enums to bitmask
+        // neli expects bit (group-1) to be set for group N
         let mut mask: u32 = 0;
         for group in groups {
-            mask |= 1 << (*group as u32);
+            let g = *group as u32;
+            if g > 0 {
+                mask |= 1 << (g - 1);
+            }
         }
 
         let socket = NlSocketHandle::connect(NlFamily::Netfilter, Some(0), Groups::new_bitmask(mask))?;
@@ -110,24 +114,44 @@ impl ConntrackEvents {
 
     /// Receive the next event. Blocks until an event is available.
     pub fn recv(&self) -> Result<Event> {
-        let (msgs, _groups): (neli::types::NlBuffer<CtNetlinkMessage, Genlmsghdr<u8, ConntrackAttr>>, _) =
-            self.socket.recv_all()?;
+        loop {
+            // Use u16 for nl_type to accept any message type
+            // Netfilter messages use (subsys << 8 | msg_type) format
+            let (msgs, _groups): (neli::types::NlBuffer<u16, Genlmsghdr<u8, ConntrackAttr>>, _) =
+                self.socket.recv_all()?;
 
-        for msg in msgs {
-            let event_type = match msg.nl_type() {
-                CtNetlinkMessage::New => EventType::New,
-                CtNetlinkMessage::Delete => EventType::Destroy,
-                _ => EventType::Update,
-            };
+            for msg in msgs {
+                // Extract message type from nl_type
+                // Format: (NFNL_SUBSYS_CTNETLINK << 8) | msg_type
+                // NFNL_SUBSYS_CTNETLINK = 1
+                // msg_types: NEW=0, GET=1, DELETE=2
+                let nl_type = msg.nl_type();
+                let subsys = (nl_type >> 8) as u8;
+                let msg_type = (nl_type & 0xFF) as u8;
 
-            if let NlPayload::Payload(message) = msg.nl_payload() {
-                let handle = message.attrs().get_attr_handle();
-                let flow = Flow::decode(handle)?;
-                return Ok(Event { event_type, flow });
+                // Only process conntrack messages (subsys 1)
+                if subsys != 1 {
+                    continue;
+                }
+
+                let event_type = match msg_type {
+                    0 => EventType::New,      // IPCTNL_MSG_CT_NEW
+                    2 => EventType::Destroy,  // IPCTNL_MSG_CT_DELETE
+                    _ => EventType::Update,
+                };
+
+                if let NlPayload::Payload(message) = msg.nl_payload() {
+                    let handle = message.attrs().get_attr_handle();
+                    match Flow::decode(handle) {
+                        Ok(flow) => return Ok(Event { event_type, flow }),
+                        Err(e) => {
+                            log::warn!("Failed to decode flow: {}", e);
+                            continue;
+                        }
+                    }
+                }
             }
         }
-
-        Err(crate::error::Error::Netlink("No valid event received".into()))
     }
 
     /// Returns an iterator over events
